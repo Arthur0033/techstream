@@ -28,7 +28,16 @@
     left: 50%;
     transform: translateX(-50%);
   }
-
+  /* // position: absolute; top: 570px; left: 50%; transform: translateX(-50%); font-family: sans-serif; font-size: 13px; padding: 4px 6px;
+  #dateDropdown {
+    position: absolute;
+    top: 590px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: sans-serif;
+    font-size: 13px;
+    padding: 4px 6px;
+  } */
   #prefixDropdown {
     position: absolute;
     top: 600px;
@@ -41,7 +50,7 @@
 
   #autorotateButton, #playPauseButton {
     position: absolute;
-    top: 640px;
+    top: 640px; /* Adjusted from 640px */
     left: 50%;
     transform: translateX(-50%);
     font-family: sans-serif;
@@ -52,7 +61,7 @@
   }
 
   #playPauseButton {
-    top: 670px;
+    top: 680px; /* Adjusted from 670px */
   }
 
   .flightPath {
@@ -83,8 +92,14 @@
   }
 </style>
 
+<select id="dateDropdown">
+  <option value="flights100k-jan1.csv" selected>Before (Jan 1 2019)</option>
+  <option value="flights100k-apr1.csv">Peak (Apr 1 2019)</option>
+  <option value="flights100k-dec1.csv">After (Dec 1 2022)</option>
+</select>
+
 <div id="map"></div>
-<div id="infoBox">Click a plane to see details</div>
+<div id="infoBox">Click a plane or airport to see details</div>
 
 <div id="timeline">
   <svg id="sliderSvg" width="960" height="60"></svg>
@@ -93,6 +108,7 @@
 <select id="prefixDropdown">
   <option value="">Select airline prefix</option>
 </select>
+
 
 <button id="autorotateButton">Toggle Autorotate</button>
 <button id="playPauseButton">Play Timeline</button>
@@ -110,16 +126,64 @@
 
   // Load data files (assumes they're in same folder)
   const world = await d3.json("world.json");
-  const flights = await d3.csv("flights100k.csv", d => ({
-    ...d,
-    latitude_1: +d.latitude_1,
-    longitude_1: +d.longitude_1,
-    latitude_2: +d.latitude_2,
-    longitude_2: +d.longitude_2,
-    firstseen: d.firstseen ? new Date(d.firstseen) : null,
-    lastseen: d.lastseen ? new Date(d.lastseen) : null,
-    timestamp: d.timestamp ? (isNaN(+d.timestamp) ? d.timestamp : +d.timestamp) : null
-  }));
+  let flights = []; // Declare flights globally or in a scope accessible by loadFlightsData
+  let startTime = new Date("2019-01-01T00:00:00Z");
+
+  async function loadFlightsData(filename) {
+    flights = await d3.csv(filename, d => ({
+      ...d,
+      latitude_1: +d.latitude_1,
+      longitude_1: +d.longitude_1,
+      latitude_2: +d.latitude_2,
+      longitude_2: +d.longitude_2,
+      firstseen: d.firstseen ? new Date(d.firstseen) : null,
+      lastseen: d.lastseen ? new Date(d.lastseen) : null,
+      timestamp: d.timestamp ? (isNaN(+d.timestamp) ? d.timestamp : +d.timestamp) : null
+    }));
+    // After loading new data, re-render the flights
+    //updateFlights(null); // Pass null to updateFlights to show all flights for the new dataset
+
+  }
+  //flights = loadFlightsData("flights100k-jan1.csv");
+
+    // Load initial data
+  loadFlightsData("flights100k-jan1.csv").then(() => {
+    //updateFlights(null); // Show all flights initially
+  });
+
+  // Handle dataset switch
+  d3.select("#dateDropdown").on("change", function() {
+    const selectedFile = this.value;
+    console.log("Loading dataset:", selectedFile);
+    loadFlightsData(selectedFile).then(() => {
+      // Update startTime based on selected dataset
+      console.log("Updating startTime for dataset:", selectedFile);
+    startTime = selectedFile === "flights100k-jan1.csv" ? new Date("2019-01-01T00:00:00Z") :
+                selectedFile === "flights100k-apr1.csv" ? new Date("2020-04-01T00:00:00Z") :
+                selectedFile === "flights100k-dec1.csv" ? new Date("2022-12-01T00:00:00Z") :
+                new Date("2019-01-01T00:00:00Z");
+
+    // --- Update timeline scale after loading new flights ---
+    // const timeExtent = d3.extent(flights, d => d.timestamp);
+    // xScale.domain(timeExtent);
+
+    // // Reset timeline slider
+    // d3.select("#timelineSlider")
+    //   .attr("min", timeExtent[0])
+    //   .attr("max", timeExtent[1])
+    //   .attr("value", timeExtent[0]);
+
+    // // Reset play button state
+    // isPlaying = false;
+    // d3.select("#playButton").text("Play");
+
+    // // Redraw timeline axis (optional)
+    // timelineSvg.select(".x-axis")
+    //   .call(d3.axisBottom(xScale).ticks(5));
+    
+    });
+  });
+
 
   const faaData = await d3.csv("faa.csv");
   const faaLookup = {};
@@ -176,7 +240,6 @@
     "CV": "Cape Verde", "ST": "São Tomé and Príncipe", "GQ": "Equatorial Guinea"
   };
 
-  const startTime = new Date("2019-01-01T00:00:00Z");
 
   // Projection + path
   let projection = d3.geoOrthographic()
@@ -367,12 +430,12 @@
       .attr("cy", d => {
         const p = projection([+d.longitude_1, +d.latitude_1]);
         return p ? p[1] : -100;
-      })
-      .attr("transform", d => {
-        const alt = +d.altitude || 0;
-        console.log("Flight altitude:", alt);
-        return "scale(${d.altitude}";
       });
+      // .attr("transform", d => {
+      //   const alt = +d.altitude || 0;
+      //   console.log("Flight altitude:", alt);
+      //   return "scale(${d.altitude}";
+      // });
     circles.exit().remove();
     applyHighlightColors();
   }
@@ -683,8 +746,9 @@
         const hours = Math.floor(minutes/60);
         const mins = minutes % 60;
         const currentTime = new Date(startTime.getTime() + minutes*60000);
+        console.log("Slider time:", currentTime.toISOString());
         updateFlights(currentTime);
-        infoBox.text("Click a plane to see details");
+        infoBox.text("Click a plane or airport to see details");
         d3.select("#timeLabel").text(`Time: ${String(hours).padStart(2,"0")}:${String(mins).padStart(2,"0")} UTC`);
       })
     );
@@ -708,8 +772,14 @@
     pathsGroup.selectAll("path.flightPath").remove();
     clearCountryAnimation();
     applyHighlightColors();
-    infoBox.text(activePrefixHighlight ? `Highlighting flights with prefix: ${activePrefixHighlight}` : "Click a plane to see details");
+    infoBox.text(activePrefixHighlight ? `Highlighting flights with prefix: ${activePrefixHighlight}` : "Click a plane or airport to see details");
   });
+
+  const dateDropdown = d3.select("#dateDropdown");
+  // dateDropdown.on("change", function() {
+  //   loadFlightsData(this.value);
+  //   infoBox.text("Click a plane to see details");
+  // });
 
   autorotateBtn.on("click", ()=>{
     autorotate = !autorotate;
@@ -732,7 +802,7 @@
         const mins = minutes % 60;
         const currentTime = new Date(startTime.getTime() + minutes*60000);
         updateFlights(currentTime);
-        infoBox.text("Click a plane to see details");
+        infoBox.text("Click a plane or airport to see details");
         d3.select("#timeLabel").text(`Time: ${String(hours).padStart(2,"0")}:${String(mins).padStart(2,"0")} UTC`);
       }, 500);
     } else {
@@ -743,7 +813,8 @@
   d3.select("#xxx").append("text").attr("id","timeLabel").text("Time: 00:00 UTC");
 
   // Initial render
-  updateFlights(startTime);
+  //loadFlightsData(dateDropdown.property("value")); // Load default data
+  loadFlightsData("flights100k-jan1.csv"); // Load default data
   updateAllAirportPositions();
 
   // Background click clears selection
@@ -756,7 +827,7 @@
     specialAirportsGroup.selectAll("*").remove();
     clearCountryAnimation();
     applyHighlightColors();
-    infoBox.text("Click a plane to see details");
+    infoBox.text("Click a plane or airport to see details");
   });
 
   // Drag rotation
