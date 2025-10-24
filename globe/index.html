@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<style>
+  #map {
+    width: 960px;
+    margin: 0 auto;
+    position: relative;
+  }
+
+  #infoBox {
+    position: absolute;
+    top: 20px;
+    right: 30px;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-family: sans-serif;
+    font-size: 13px;
+    line-height: 1.4;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    max-width: 300px;
+  }
+
+  #timeline {
+    position: absolute;
+    top: 520px;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  #prefixDropdown {
+    position: absolute;
+    top: 600px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: sans-serif;
+    font-size: 13px;
+    padding: 4px 6px;
+  }
+
+  #autorotateButton, #playPauseButton {
+    position: absolute;
+    top: 640px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: sans-serif;
+    font-size: 13px;
+    padding: 4px 6px;
+    cursor: pointer;
+    margin-top: 0px;
+  }
+
+  #playPauseButton {
+    top: 670px;
+  }
+
+  .flightPath {
+    pointer-events: none;
+  }
+
+  @keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.2); }
+    100% { transform: scale(1); }
+  }
+
+  circle.pulsing {
+    transform-origin: center center;
+    animation: pulse 1s infinite;
+  }
+
+  @keyframes wave {
+    0% { stroke-width: 1; fill: rgba(255, 215, 0, 0.3); }
+    25% { stroke-width: 3; fill: rgba(255, 215, 0, 0.5); }
+    50% { stroke-width: 5; fill: rgba(255, 215, 0, 0.7); }
+    75% { stroke-width: 3; fill: rgba(255, 215, 0, 0.5); }
+    100% { stroke-width: 1; fill: rgba(255, 215, 0, 0.3); }
+  }
+
+  path.country-wave {
+    animation: wave 2s ease-in-out infinite;
+  }
+</style>
+
+<div id="map"></div>
+<div id="infoBox">Click a plane to see details</div>
+
+<div id="timeline">
+  <svg id="sliderSvg" width="960" height="60"></svg>
+</div>
+
+<select id="prefixDropdown">
+  <option value="">Select airline prefix</option>
+</select>
+
+<button id="autorotateButton">Toggle Autorotate</button>
+<button id="playPauseButton">Play Timeline</button>
+<div id="xxx"></div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://d3js.org/topojson.v1.min.js"></script>
+
+<script>
+(async function () {
+  // Basic dimensions
+  const width = d3.select("#map").node().getBoundingClientRect().width;
+  const height = 500;
+  const sensitivity = 75;
+
+  // Load data files (assumes they're in same folder)
+  const world = await d3.json("world.json");
+  const flights = await d3.csv("flights100k.csv", d => ({
+    ...d,
+    latitude_1: +d.latitude_1,
+    longitude_1: +d.longitude_1,
+    latitude_2: +d.latitude_2,
+    longitude_2: +d.longitude_2,
+    firstseen: d.firstseen ? new Date(d.firstseen) : null,
+    lastseen: d.lastseen ? new Date(d.lastseen) : null,
+    timestamp: d.timestamp ? (isNaN(+d.timestamp) ? d.timestamp : +d.timestamp) : null
+  }));
+
+  const faaData = await d3.csv("faa.csv");
+  const faaLookup = {};
+  faaData.forEach(d => {
+    if(d['3Ltr']) faaLookup[d['3Ltr'].toUpperCase()] = d;
+  });
+
+  const aircraftData = await d3.csv("aircraft.csv");
+  const aircraftLookup = {};
+  aircraftData.forEach(d => {
+    if(d.registration) aircraftLookup[d.registration.toUpperCase()] = d;
+  });
+
+  const airports = await d3.csv("airports.csv");
+  const airportLookup = {};
+  airports.forEach(d => {
+    [d.ident, d.icao_code, d.iata_code, d.gps_code].forEach(k => {
+      if (k) {
+        airportLookup[k.toUpperCase()] = d;
+      }
+    });
+  });
+
+  const largeAirports = airports.filter(d => d.type === "large_airport" && d.wikipedia_link);
+
+  // COMPLETE Country code to name mapping
+  const countryCodeToName = {
+    "RU": "Russia", "GH": "Ghana", "US": "United States of America", "GB": "United Kingdom",
+    "FR": "France", "DE": "Germany", "IT": "Italy", "ES": "Spain", "JP": "Japan", "CN": "China",
+    "IN": "India", "BR": "Brazil", "CA": "Canada", "AU": "Australia", "MX": "Mexico",
+    "ID": "Indonesia", "TR": "Turkey", "SA": "Saudi Arabia", "EG": "Egypt", "NG": "Nigeria",
+    "ZA": "South Africa", "AR": "Argentina", "CO": "Colombia", "PL": "Poland", "NL": "Netherlands",
+    "BE": "Belgium", "SE": "Sweden", "NO": "Norway", "DK": "Denmark", "FI": "Finland",
+    "CH": "Switzerland", "AT": "Austria", "PT": "Portugal", "GR": "Greece", "CZ": "Czechia",
+    "HU": "Hungary", "RO": "Romania", "BG": "Bulgaria", "HR": "Croatia", "SI": "Slovenia",
+    "SK": "Slovakia", "EE": "Estonia", "LV": "Latvia", "LT": "Lithuania", "UA": "Ukraine",
+    "BY": "Belarus", "MD": "Moldova", "AL": "Albania", "ME": "Montenegro", "RS": "Serbia",
+    "BA": "Bosnia and Herzegovina", "XK": "Kosovo", "MK": "North Macedonia", "IL": "Israel",
+    "JO": "Jordan", "LB": "Lebanon", "SY": "Syria", "IQ": "Iraq", "IR": "Iran", "AF": "Afghanistan",
+    "PK": "Pakistan", "BD": "Bangladesh", "LK": "Sri Lanka", "NP": "Nepal", "BT": "Bhutan",
+    "MV": "Maldives", "MM": "Myanmar", "TH": "Thailand", "VN": "Vietnam", "LA": "Laos",
+    "KH": "Cambodia", "KP": "North Korea", "KR": "South Korea", "MN": "Mongolia",
+    "KZ": "Kazakhstan", "UZ": "Uzbekistan", "TM": "Turkmenistan", "TJ": "Tajikistan",
+    "KG": "Kyrgyzstan", "AM": "Armenia", "AZ": "Azerbaijan", "GE": "Georgia", "CY": "Cyprus",
+    "MA": "Morocco", "DZ": "Algeria", "TN": "Tunisia", "LY": "Libya", "SD": "Sudan",
+    "SS": "South Sudan", "ET": "Ethiopia", "ER": "Eritrea", "DJ": "Djibouti", "SO": "Somalia",
+    "KE": "Kenya", "TZ": "Tanzania", "UG": "Uganda", "RW": "Rwanda", "BI": "Burundi",
+    "MR": "Mauritania", "ML": "Mali", "NE": "Niger", "TD": "Chad", "CF": "Central African Republic",
+    "CM": "Cameroon", "GA": "Gabon", "CG": "Congo", "CD": "Democratic Republic of the Congo",
+    "AO": "Angola", "ZM": "Zambia", "ZW": "Zimbabwe", "MZ": "Mozambique", "MG": "Madagascar",
+    "MW": "Malawi", "LS": "Lesotho", "SZ": "Eswatini", "BW": "Botswana", "NA": "Namibia",
+    "GM": "Gambia", "SL": "Sierra Leone", "LR": "Liberia", "CI": "Côte d'Ivoire", "TG": "Togo",
+    "BJ": "Benin", "BF": "Burkina Faso", "GN": "Guinea", "GW": "Guinea-Bissau", "SN": "Senegal",
+    "CV": "Cape Verde", "ST": "São Tomé and Príncipe", "GQ": "Equatorial Guinea"
+  };
+
+  const startTime = new Date("2019-01-01T00:00:00Z");
+
+  // Projection + path
+  let projection = d3.geoOrthographic()
+    .scale(250)
+    .center([0,0])
+    .rotate([0, -30])
+    .translate([width/2, height/2]);
+
+  let path = d3.geoPath().projection(projection);
+  const initialScale = projection.scale();
+
+  // SVG containers
+  const svg = d3.select("#map").append("svg")
+    .attr("width", width)
+    .attr("height", height);
+
+  const svg2 = d3.select("#xxx").append("svg")
+    .attr("width", width)
+    .attr("height", height);
+
+  svg2.append("text")
+    .attr("x", 20).attr("y", 300)
+    .attr("font-size", "14px")
+    .attr("font-family", "sans-serif")
+    .attr("fill", "black")
+    .text("Data Source: OpenSky Network (https://opensky-network.org)");
+
+  // Globe circle
+  svg.append("circle")
+    .attr("fill", "#EEE")
+    .attr("stroke", "#000")
+    .attr("stroke-width", 0.2)
+    .attr("cx", width/2)
+    .attr("cy", height/2)
+    .attr("r", projection.scale());
+
+  // Map layer
+  const map = svg.append("g");
+  const countryPaths = map.append("g")
+    .selectAll("path.country")
+    .data(world.features)
+    .enter()
+    .append("path")
+    .attr("class", "country")
+    .attr("d", path)
+    .attr("fill", "white")
+    .style("stroke", "black")
+    .style("stroke-width", 0.3)
+    .style("opacity", 0.8);
+
+  // Points and paths groups
+  const pointsGroup = svg.append("g");
+  const pathsGroup = svg.append("g");
+  const specialAirportsGroup = svg.append("g").attr("class", "special-airports");
+  const allAirportsGroup = svg.append("g").attr("class", "all-airports");
+
+  // Add all large airports
+  const airportRects = allAirportsGroup.selectAll("rect.airport")
+    .data(largeAirports)
+    .enter().append("rect")
+    .attr("class", "airport")
+    .attr("width", 5)
+    .attr("height", 5)
+    .attr("fill", "blue")
+    .attr("opacity", 0.7)
+    .on("click", (event, d) => { 
+      event.stopPropagation(); 
+      showAirportInfo(d); 
+    });
+
+  // UI references
+  const infoBox = d3.select("#infoBox");
+  const dropdown = d3.select("#prefixDropdown");
+  const autorotateBtn = d3.select("#autorotateButton");
+  const playPauseBtn = d3.select("#playPauseButton");
+
+  // State
+  let activeFlight = null;
+  let activePrefixHighlight = null;
+  let activeAircraftHighlight = null;
+  let activeAirport = null;
+  let autorotate = true;
+  let playing = false;
+  let playTimer = null;
+
+  const minAltitude = 0;
+  const maxAltitude = 50000;
+  const minScale = 1.0;
+  const maxScale = 3.0;
+
+  const altitudeScale = d3.scaleLinear()
+  .domain([minAltitude, maxAltitude])
+  .range([minScale, maxScale])
+  .clamp(true);
+
+  // Get active flights
+  function getActiveFlights(time) {
+    if (!time) return flights;
+    return flights.filter(f => {
+      if (f.firstseen && f.lastseen) return f.firstseen <= time && time <= f.lastseen;
+      if (f.timestamp && typeof f.timestamp === 'number') return true;
+      return true;
+    });
+  }
+
+  // Update dropdown
+  function updateDropdown(activeFlights) {
+    const prefixCounts = {};
+    activeFlights.forEach(f => {
+      const prefix = (f.callsign||"").slice(0,3).toUpperCase();
+      if (!prefix) return;
+      prefixCounts[prefix] = (prefixCounts[prefix] || 0) + 1;
+    });
+    const topPrefixes = Object.entries(prefixCounts)
+      .sort((a,b)=>b[1]-a[1])
+      .slice(0,20)
+      .map(d=>d[0]);
+
+    const options = dropdown.selectAll("option.prefix").data(topPrefixes, d=>d);
+    options.enter().append("option").attr("class","prefix").merge(options)
+      .attr("value", d=>d)
+      .text(d=> faaLookup[d] ? faaLookup[d].Company : d);
+    options.exit().remove();
+
+    if (!topPrefixes.includes(activePrefixHighlight)) {
+      activePrefixHighlight = null;
+      dropdown.property("value", "");
+    }
+
+    // Bar chart
+    svg2.selectAll("*").remove();
+    svg2.append("text")
+      .attr("x", 10).attr("y", 20)
+      .attr("font-size", "12px")
+      .text("Top prefixes (live)");
+
+    if (topPrefixes.length) {
+      const barMargin = {top: 200, right: 20, bottom: 30, left: 140};
+      const barWidth = width - barMargin.left - barMargin.right;
+      const barHeight = Math.max(100, topPrefixes.length * 18);
+      const xScale = d3.scaleLinear()
+        .domain([0, d3.max(Object.values(prefixCounts)) || 1])
+        .range([0, barWidth]);
+      const yScale = d3.scaleBand()
+        .domain(topPrefixes)
+        .range([0, barHeight])
+        .padding(0.1);
+      const barGroup = svg2.append("g").attr("transform", `translate(${barMargin.left},${barMargin.top})`);
+      barGroup.selectAll("rect")
+        .data(topPrefixes)
+        .enter().append("rect")
+        .attr("y", d=>yScale(d))
+        .attr("width", d=>xScale(prefixCounts[d]||0))
+        .attr("height", yScale.bandwidth())
+        .attr("fill", "steelblue");
+      barGroup.selectAll("text.label")
+        .data(topPrefixes)
+        .enter().append("text")
+        .attr("class","label")
+        .attr("x", d=>xScale(prefixCounts[d]||0) + 5)
+        .attr("y", d=>yScale(d) + yScale.bandwidth()/2 + 4)
+        .text(d=>`${faaLookup[d] ? faaLookup[d].Company : d} (${prefixCounts[d]||0})`)
+        .attr("font-size", "11px");
+      const xAxis = d3.axisBottom(xScale).ticks(4);
+      barGroup.append("g").attr("transform", `translate(0,${barHeight})`).call(xAxis);
+    }
+  }
+
+  // Update flights
+  function updateFlights(time) {
+    const activeFlights = getActiveFlights(time);
+    updateDropdown(activeFlights);
+
+    const circles = pointsGroup.selectAll("circle.flight")
+      .data(activeFlights, d=>d.icao24);
+
+    circles.enter()
+      .append("circle")
+      .attr("class","flight")
+      .attr("r", 2.8)
+      .attr("opacity", 0.85)
+      .on("click", (event,d) => { event.stopPropagation(); selectFlight(d); })
+      .merge(circles)
+      .attr("cx", d => {
+        const p = projection([+d.longitude_1, +d.latitude_1]);
+        return p ? p[0] : -100;
+      })
+      .attr("cy", d => {
+        const p = projection([+d.longitude_1, +d.latitude_1]);
+        return p ? p[1] : -100;
+      })
+      .attr("transform", d => {
+        const alt = +d.altitude || 0;
+        console.log("Flight altitude:", alt);
+        return "scale(${d.altitude}";
+      });
+    circles.exit().remove();
+    applyHighlightColors();
+  }
+
+  // Animate country
+  function animateCountry(countryName) {
+    countryPaths.classed("country-wave", false);
+    if (!countryName) return;
+    console.log("Animating country:", countryName);
+    const animated = countryPaths
+      .filter(function(d) { return d.properties.name === countryName; })
+      .classed("country-wave", true);
+    console.log("Found countries:", animated.size());
+  }
+
+  function clearCountryAnimation() {
+    countryPaths.classed("country-wave", false);
+  }
+
+  // Select flight
+  function selectFlight(f) {
+    activeFlight = f;
+    activeAirport = null;
+    activePrefixHighlight = null;
+    activeAircraftHighlight = (f.registration||"").toUpperCase();
+    clearCountryAnimation();
+    applyHighlightColors();
+    pathsGroup.selectAll("path.flightPath").remove();
+
+    const flightPositions = flights
+      .filter(d => d.icao24 === f.icao24)
+      .sort((a,b) => {
+        const ta = a.timestamp || (a.firstseen ? a.firstseen.getTime() : 0);
+        const tb = b.timestamp || (b.firstseen ? b.firstseen.getTime() : 0);
+        return (ta || 0) - (tb || 0);
+      });
+
+    if (flightPositions.length > 1) {
+      const projectedPoints = flightPositions
+        .map(p => {
+          const pr = projection([+p.longitude_1, +p.latitude_1]);
+          return pr ? [pr[0], pr[1]] : null;
+        })
+        .filter(pp => pp);
+
+      if (projectedPoints.length > 1) {
+        const pathElement = pathsGroup.append("path")
+          .datum(flightPositions)
+          .attr("class", "flightPath")
+          .attr("fill", "none")
+          .attr("stroke", "orange")
+          .attr("stroke-width", 1.8)
+          .attr("opacity", 0.95)
+          .attr("stroke-linecap", "round")
+          .attr("stroke-linejoin", "round");
+
+        const initialD = d3.line().curve(d3.curveNatural)(projectedPoints);
+        pathElement.attr("d", initialD);
+
+        try {
+          const totalLength = pathElement.node().getTotalLength();
+          pathElement
+            .attr("stroke-dasharray", totalLength + " " + totalLength)
+            .attr("stroke-dashoffset", totalLength)
+            .transition()
+            .duration(1500)
+            .ease(d3.easeLinear)
+            .attr("stroke-dashoffset", 0);
+        } catch (e) {}
+      }
+    }
+
+    const prefix = (f.callsign||"").slice(0,3).toUpperCase();
+    const airline = faaLookup[prefix];
+    const aircraft = aircraftLookup[(f.registration||"").toUpperCase()];
+    const origAirport = airportLookup[(f.origin || "").toUpperCase()];
+    const destAirport = airportLookup[(f.dest || "").toUpperCase()];
+
+    let page = 0;
+    const pageSize = 5;
+    const totalPages = Math.ceil(flightPositions.length / pageSize);
+
+    function renderPage() {
+      const start = page * pageSize;
+      const end = Math.min(start + pageSize, flightPositions.length);
+      const subset = flightPositions.slice(start, end);
+
+      let tableHTML = `
+        <table style="font-size:12px; border-collapse: collapse; margin-top:6px;">
+          <tr><th align="left">Time (UTC)</th><th align="left">Latitude</th><th align="left">Longitude</th></tr>
+          ${subset.map(p => {
+            const time = p.firstseen ? p.firstseen.toISOString().substring(11,19) :
+                         (typeof p.timestamp === "number" ? new Date(startTime.getTime() + p.timestamp*1000).toISOString().substring(11,19) : "N/A");
+            return `<tr><td>${time}</td><td>${(+p.latitude_1).toFixed(2)}</td><td>${(+p.longitude_1).toFixed(2)}</td></tr>`;
+          }).join("")}
+        </table>
+        <div style="margin-top:6px; text-align:center;">
+          <button id="prevPageBtn" ${page===0?'disabled':''}>Prev</button>
+          Page ${page+1} of ${totalPages}
+          <button id="nextPageBtn" ${page>=totalPages-1?'disabled':''}>Next</button>
+        </div>
+      `;
+
+      let originDetails = '';
+      if (origAirport) {
+        originDetails = `
+          <h4>Airport Info - Origin</h4>
+          <b>Name:</b> ${origAirport.name}<br>
+          <b>Ident:</b> ${origAirport.ident || "N/A"}<br>
+          <b>Location:</b> ${origAirport.latitude_deg}, ${origAirport.longitude_deg}<br>
+          <b>Elevation:</b> ${origAirport.elevation_ft || "N/A"} ft<br>
+          <b>Country:</b> ${origAirport.iso_country || "N/A"}<br>
+        `;
+      }
+
+      let destDetails = '';
+      if (destAirport) {
+        destDetails = `
+          <h4>Airport Info - Destination</h4>
+          <b>Name:</b> ${destAirport.name}<br>
+          <b>Ident:</b> ${destAirport.ident || "N/A"}<br>
+          <b>Location:</b> ${destAirport.latitude_deg}, ${destAirport.longitude_deg}<br>
+          <b>Elevation:</b> ${destAirport.elevation_ft || "N/A"} ft<br>
+          <b>Country:</b> ${destAirport.iso_country || "N/A"}<br>
+        `;
+      }
+
+      infoBox.html(`
+        <strong>Flight Info</strong><br>
+        <b>ICAO24:</b> ${f.icao24 || "N/A"}<br>
+        <b>Registration:</b> ${f.registration || "N/A"}<br>
+        <b>Model:</b> ${aircraft ? aircraft.model : "N/A"}<br>
+        <b>From:</b> ${f.origin || "N/A"} <b>→ To:</b> ${f.dest || "N/A"}<br>
+        <b>Callsign:</b> ${f.callsign || "N/A"}<br>
+        <b>Airline:</b> ${airline ? airline.Company : "N/A"}<br>
+        ${originDetails}
+        ${destDetails}
+        <br><b>Positions:</b> (${flightPositions.length} total)
+        ${tableHTML}
+      `);
+
+      d3.select("#prevPageBtn").on("click", () => { if (page > 0) { page--; renderPage(); } });
+      d3.select("#nextPageBtn").on("click", () => { if (page < totalPages-1) { page++; renderPage(); } });
+    }
+
+    renderPage();
+
+    const airportPoints = [];
+    if (origAirport) airportPoints.push({ap: origAirport, color: "green", label: "Origin: " + origAirport.name});
+    if (destAirport) airportPoints.push({ap: destAirport, color: "red", label: "Dest: " + destAirport.name});
+
+    const apRects = specialAirportsGroup.selectAll("rect.special-airport").data(airportPoints);
+    apRects.enter().append("rect").attr("class", "special-airport")
+      .merge(apRects)
+      .attr("width", 6).attr("height", 6).attr("fill", d => d.color).attr("opacity", 0.8);
+    apRects.exit().remove();
+
+    const apLabels = specialAirportsGroup.selectAll("text.special-airport").data(airportPoints);
+    apLabels.enter().append("text").attr("class", "special-airport")
+      .merge(apLabels)
+      .attr("font-size", "12px")
+      .attr("fill", "black")
+      .text(d => d.label.slice(0,20));
+    apLabels.exit().remove();
+
+    updateSpecialAirportPositions();
+  }
+
+  // Show airport info
+  function showAirportInfo(ap) {
+    activeFlight = null;
+    activePrefixHighlight = null;
+    activeAircraftHighlight = null;
+    activeAirport = ap;
+    pathsGroup.selectAll("path.flightPath").remove();
+    specialAirportsGroup.selectAll("*").remove();
+    applyHighlightColors();
+
+    const countryName = countryCodeToName[ap.iso_country] || ap.iso_country;
+    console.log("Airport country:", ap.iso_country, "Matched name:", countryName);
+    animateCountry(countryName);
+
+    let details = `
+      <h4>Airport Info</h4>
+      <b>Name:</b> ${ap.name}<br>
+      <b>Ident:</b> ${ap.ident || "N/A"}<br>
+      <b>Location:</b> ${ap.latitude_deg}, ${ap.longitude_deg}<br>
+      <b>Elevation:</b> ${ap.elevation_ft || "N/A"} ft<br>
+      <b>Country:</b> ${ap.iso_country || "N/A"}<br>
+    `;
+    if (ap.wikipedia_link) details += `<a href="${ap.wikipedia_link}" target="_blank">Wikipedia</a><br>`;
+
+    infoBox.html(`<strong>Airport Info</strong><br>${details}`);
+
+    const point = [{ap: ap, color: "purple", label: ap.name.slice(0,20)}];
+    const apRects = specialAirportsGroup.selectAll("rect.special-airport").data(point);
+    apRects.enter().append("rect").attr("class", "special-airport")
+      .merge(apRects)
+      .attr("width", 6).attr("height", 6).attr("fill", d => d.color).attr("opacity", 0.8);
+
+    const apLabels = specialAirportsGroup.selectAll("text.special-airport").data(point);
+    apLabels.enter().append("text").attr("class", "special-airport")
+      .merge(apLabels)
+      .attr("font-size", "12px")
+      .attr("fill", "black")
+      .text(d => d.label);
+    updateSpecialAirportPositions();
+  }
+
+  // Apply highlight colors
+  function applyHighlightColors() {
+    pointsGroup.selectAll("circle.flight")
+      .attr("fill", d => {
+        if (activeAircraftHighlight && (d.registration||"").toUpperCase() === activeAircraftHighlight) return "purple";
+        if (activeFlight && d === activeFlight) return "green";
+        if (activeFlight && (d.callsign||"").slice(0,3).toUpperCase() === (activeFlight.callsign||"").slice(0,3).toUpperCase()) return "blue";
+        if (activePrefixHighlight && (d.callsign||"").toUpperCase().startsWith(activePrefixHighlight)) return "purple";
+        return "red";
+      })
+      .classed("pulsing", d => {
+        return (
+          (activeFlight && d === activeFlight) ||
+          (activeFlight && (d.callsign||"").slice(0,3).toUpperCase() === (activeFlight.callsign||"").slice(0,3).toUpperCase()) ||
+          (activePrefixHighlight && (d.callsign||"").toUpperCase().startsWith(activePrefixHighlight)) ||
+          (activeAircraftHighlight && (d.registration||"").toUpperCase() === activeAircraftHighlight)
+        );
+      });
+  }
+
+  function reprojectPaths() {
+    pathsGroup.selectAll("path.flightPath")
+      .attr("d", function(dPositions) {
+        if (!Array.isArray(dPositions) || dPositions.length < 2) return null;
+        const projected = dPositions
+          .map(p => {
+            const pr = projection([+p.longitude_1, +p.latitude_1]);
+            return pr ? [pr[0], pr[1]] : null;
+          })
+          .filter(p => p !== null);
+        if (projected.length < 2) return null;
+        return d3.line().curve(d3.curveNatural)(projected);
+      });
+  }
+
+  function updateAllAirportPositions() {
+    allAirportsGroup.selectAll("rect.airport")
+      .attr("x", d => {
+        const p = projection([+d.longitude_deg, +d.latitude_deg]);
+        return p ? p[0] - 2.5 : -100;
+      })
+      .attr("y", d => {
+        const p = projection([+d.longitude_deg, +d.latitude_deg]);
+        return p ? p[1] - 2.5 : -100;
+      });
+  }
+
+  function updateSpecialAirportPositions() {
+    specialAirportsGroup.selectAll("rect.special-airport")
+      .attr("x", d => {
+        const p = projection([+d.ap.longitude_deg, +d.ap.latitude_deg]);
+        return p ? p[0] - 3 : -100;
+      })
+      .attr("y", d => {
+        const p = projection([+d.ap.longitude_deg, +d.ap.latitude_deg]);
+        return p ? p[1] - 3 : -100;
+      });
+
+    specialAirportsGroup.selectAll("text.special-airport")
+      .attr("x", d => {
+        const p = projection([+d.ap.longitude_deg, +d.ap.latitude_deg]);
+        return p ? p[0] + 8 : -100;
+      })
+      .attr("y", d => {
+        const p = projection([+d.ap.longitude_deg, +d.ap.latitude_deg]);
+        return p ? p[1] + 4 : -100;
+      });
+  }
+
+  // Timeline Slider
+  const sliderWidth = 900;
+  const sliderHeight = 50;
+  const margin = {left:30, right:30};
+  const totalMinutes = 24*60;
+  const stepMinutes = 5;
+  const xScale = d3.scaleLinear().domain([0, totalMinutes]).range([margin.left, sliderWidth - margin.right]);
+  const svgSlider = d3.select("#sliderSvg");
+
+  svgSlider.append("line")
+    .attr("x1", xScale(0))
+    .attr("x2", xScale(totalMinutes))
+    .attr("y1", sliderHeight/2)
+    .attr("y2", sliderHeight/2)
+    .attr("stroke", "#aaa")
+    .attr("stroke-width", 4);
+
+  const handle = svgSlider.append("circle")
+    .attr("cx", xScale(0))
+    .attr("cy", sliderHeight/2)
+    .attr("r", 8)
+    .attr("fill", "steelblue")
+    .call(d3.drag()
+      .on("drag", (event) => {
+        let x = event.x;
+        x = Math.max(xScale(0), Math.min(xScale(totalMinutes), x));
+        handle.attr("cx", x);
+
+        const minutes = Math.round(xScale.invert(x)/stepMinutes)*stepMinutes;
+        const hours = Math.floor(minutes/60);
+        const mins = minutes % 60;
+        const currentTime = new Date(startTime.getTime() + minutes*60000);
+        updateFlights(currentTime);
+        infoBox.text("Click a plane to see details");
+        d3.select("#timeLabel").text(`Time: ${String(hours).padStart(2,"0")}:${String(mins).padStart(2,"0")} UTC`);
+      })
+    );
+
+  const xAxis = d3.axisBottom(xScale)
+    .tickValues(d3.range(0, totalMinutes+1, 60))
+    .tickFormat(d => `${String(Math.floor(d/60)).padStart(2,"0")}:00`);
+
+  svgSlider.append("g")
+    .attr("transform", `translate(0, ${sliderHeight/2 + 15})`)
+    .call(xAxis)
+    .selectAll("text")
+    .style("font-size", "12px");
+
+  // Event handlers
+  dropdown.on("change", function(){
+    activePrefixHighlight = this.value || null;
+    activeFlight = null;
+    activeAirport = null;
+    activeAircraftHighlight = null;
+    pathsGroup.selectAll("path.flightPath").remove();
+    clearCountryAnimation();
+    applyHighlightColors();
+    infoBox.text(activePrefixHighlight ? `Highlighting flights with prefix: ${activePrefixHighlight}` : "Click a plane to see details");
+  });
+
+  autorotateBtn.on("click", ()=>{
+    autorotate = !autorotate;
+    autorotateBtn.text(autorotate ? "Turn Autorotate Off" : "Turn Autorotate On");
+  });
+
+  playPauseBtn.on("click", ()=>{
+    playing = !playing;
+    playPauseBtn.text(playing ? "Pause Timeline" : "Play Timeline");
+    if (playing) {
+      if (playTimer) clearInterval(playTimer);
+      playTimer = setInterval(()=>{
+        const cx = +handle.attr("cx");
+        let x = cx + (xScale(stepMinutes)-xScale(0));
+        if (x > xScale(totalMinutes)) x = xScale(0);
+        handle.attr("cx", x);
+
+        const minutes = Math.round(xScale.invert(x)/stepMinutes)*stepMinutes;
+        const hours = Math.floor(minutes/60);
+        const mins = minutes % 60;
+        const currentTime = new Date(startTime.getTime() + minutes*60000);
+        updateFlights(currentTime);
+        infoBox.text("Click a plane to see details");
+        d3.select("#timeLabel").text(`Time: ${String(hours).padStart(2,"0")}:${String(mins).padStart(2,"0")} UTC`);
+      }, 500);
+    } else {
+      clearInterval(playTimer);
+    }
+  });
+
+  d3.select("#xxx").append("text").attr("id","timeLabel").text("Time: 00:00 UTC");
+
+  // Initial render
+  updateFlights(startTime);
+  updateAllAirportPositions();
+
+  // Background click clears selection
+  svg.on("click", () => {
+    activeFlight = null;
+    activeAirport = null;
+    activePrefixHighlight = null;
+    activeAircraftHighlight = null;
+    pathsGroup.selectAll("path.flightPath").remove();
+    specialAirportsGroup.selectAll("*").remove();
+    clearCountryAnimation();
+    applyHighlightColors();
+    infoBox.text("Click a plane to see details");
+  });
+
+  // Drag rotation
+  svg.call(d3.drag().on("drag", event => {
+    const rotate = projection.rotate();
+    const k = sensitivity / projection.scale();
+    projection.rotate([rotate[0] + event.dx * k, rotate[1] - event.dy * k]);
+    path = d3.geoPath().projection(projection);
+    countryPaths.attr("d", path);
+    pointsGroup.selectAll("circle.flight")
+      .attr("cx", d => {
+        const p = projection([+d.longitude_1, +d.latitude_1]);
+        return p ? p[0] : -100;
+      })
+      .attr("cy", d => {
+        const p = projection([+d.longitude_1, +d.latitude_1]);
+        return p ? p[1] : -100;
+      });
+    reprojectPaths();
+    updateAllAirportPositions();
+    updateSpecialAirportPositions();
+  }));
+
+  // Zoom
+  svg.call(d3.zoom()
+    .scaleExtent([0.5, 3])
+    .on("zoom", (event) => {
+      projection.scale(initialScale * event.transform.k);
+      path = d3.geoPath().projection(projection);
+      countryPaths.attr("d", path);
+      pointsGroup.selectAll("circle.flight")
+        .attr("cx", d => {
+          const p = projection([+d.longitude_1, +d.latitude_1]);
+          return p ? p[0] : -100;
+        })
+        .attr("cy", d => {
+          const p = projection([+d.longitude_1, +d.latitude_1]);
+          return p ? p[1] : -100;
+        });
+      svg.select("circle").attr("r", projection.scale());
+      reprojectPaths();
+      updateAllAirportPositions();
+      updateSpecialAirportPositions();
+    })
+  );
+
+  // Autorotation
+  d3.timer(() => {
+    if (!autorotate) return;
+    const rotate = projection.rotate();
+    projection.rotate([rotate[0] - 0.05, rotate[1]]);
+    path = d3.geoPath().projection(projection);
+    countryPaths.attr("d", path);
+    pointsGroup.selectAll("circle.flight")
+      .attr("cx", d => {
+        const p = projection([+d.longitude_1, +d.latitude_1]);
+        return p ? p[0] : -100;
+      })
+      .attr("cy", d => {
+        const p = projection([+d.longitude_1, +d.latitude_1]);
+        return p ? p[1] : -100;
+      });
+    reprojectPaths();
+    updateAllAirportPositions();
+    updateSpecialAirportPositions();
+  });
+
+})();
+</script>
+</html>
