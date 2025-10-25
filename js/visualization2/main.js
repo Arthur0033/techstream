@@ -102,8 +102,9 @@ function createMonthSelectorVis2() {
         .on("click", function(event, d) {
 
           d3.select("#visualization-2").select("svg").remove();
-          d3.select(this).style("background", "#307c32ff");
           buttons.style("background", "#1f1f1fff"); 
+          d3.select(this).style("background", "#307c32ff");
+          
 
           calendarMap = new CalendarMap("visualization-2", d);
           calendarMap.loadFlights();
