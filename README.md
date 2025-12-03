@@ -6,7 +6,7 @@
 
 * **[Process book](https://docs.google.com/document/d/1LfCu1Di3CxLBlXKwkXHrE_RhM_urP86IgMJZO8o6zVU/edit?usp=sharing)**
      * Process book also included as physical copy in `docs/` sub directory.
-* **[Video Link](https://youtu.be/uBenjUY4YJI)**
+* **[Video Link](https://youtu.be/RSl_NrsbYsU)**
      * Video link to youtube video for 2 minute walkthrough
 * **Deployed Link:** https://neloduka-sobe.github.io/techstream/
 
